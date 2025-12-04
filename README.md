@@ -5,8 +5,17 @@ A POSIX-compliant shell script that compares two directories and identifies diff
 ## Usage
 
 ```bash
-./dircompare.sh <directory1> <directory2>
+./dircompare.sh [-x|--exclude <pattern>]... <directory1> <directory2>
 ```
+
+### Options
+
+- `-x <pattern>`, `--exclude <pattern>` - Exclude directories matching the pattern (can be specified multiple times)
+
+### Arguments
+
+- `directory1` - First directory to compare
+- `directory2` - Second directory to compare
 
 ## Output
 
@@ -46,14 +55,32 @@ Compare two directories:
 ./dircompare.sh /path/to/backup /path/to/original
 ```
 
+Exclude specific directories:
+```bash
+./dircompare.sh -x env/ -x .git/ dir1 dir2
+./dircompare.sh --exclude node_modules/ --exclude __pycache__/ dir1 dir2
+```
+
+Exclude multiple directories with different patterns:
+```bash
+./dircompare.sh -x .git/ -x build/ -x dist/ project1 project2
+```
+
 Use in scripts:
 ```bash
-if ./dircompare.sh dir1 dir2; then
+if ./dircompare.sh -x venv/ dir1 dir2; then
     echo "Directories are identical"
 else
     echo "Differences found"
 fi
 ```
+
+## Exclusion Patterns
+
+- Patterns are relative paths from the comparison root
+- Use trailing slashes for directory names (e.g., `env/`, `node_modules/`)
+- Patterns can include subdirectories (e.g., `src/generated/`)
+- Exclusions apply to both directories being compared
 
 ## Limitations
 
