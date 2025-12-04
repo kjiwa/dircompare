@@ -13,6 +13,11 @@ error_exit() {
   exit 1
 }
 
+usage() {
+  echo "Usage: $0 [-x|--exclude <pattern>]... <directory1> <directory2>" >&2
+  exit 1
+}
+
 validate_directory() {
   if [ ! -d "$1" ]; then
     error_exit "Directory does not exist: $1"
@@ -32,11 +37,39 @@ get_hash_command() {
   fi
 }
 
+build_find_exclusions() {
+  exclusions="$1"
+  if [ -z "$exclusions" ]; then
+    echo ""
+    return
+  fi
+
+  result=""
+  IFS="|"
+  for pattern in $exclusions; do
+    if [ -n "$result" ]; then
+      result="$result -o"
+    fi
+    result="$result -path ./$pattern -prune"
+  done
+  echo "$result -o"
+}
+
 get_file_list() {
   dir="$1"
   output="$2"
+  exclusions="$3"
+
   cd "$dir" || error_exit "Cannot change to directory: $dir"
-  find . -type f ! -type l -print | sed 's|^\./||' | sort >"$output"
+
+  find_exclusions=$(build_find_exclusions "$exclusions")
+
+  if [ -n "$find_exclusions" ]; then
+    eval "find . $find_exclusions -type f ! -type l -print" | sed 's|^\./||' | sort >"$output"
+  else
+    find . -type f ! -type l -print | sed 's|^\./||' | sort >"$output"
+  fi
+
   cd - >/dev/null
 }
 
@@ -65,9 +98,32 @@ compare_contents() {
 }
 
 main() {
+  exclusions=""
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+    -x | --exclude)
+      if [ -z "$2" ]; then
+        error_exit "Option $1 requires an argument"
+      fi
+      if [ -z "$exclusions" ]; then
+        exclusions="$2"
+      else
+        exclusions="$exclusions|$2"
+      fi
+      shift 2
+      ;;
+    -*)
+      error_exit "Unknown option: $1"
+      ;;
+    *)
+      break
+      ;;
+    esac
+  done
+
   if [ $# -ne 2 ]; then
-    echo "Usage: $0 <directory1> <directory2>" >&2
-    exit 1
+    usage
   fi
 
   dir1="$1"
@@ -84,8 +140,8 @@ main() {
   tmphash1=$(mktemp)
   tmphash2=$(mktemp)
 
-  get_file_list "$dir1" "$tmpdir1"
-  get_file_list "$dir2" "$tmpdir2"
+  get_file_list "$dir1" "$tmpdir1" "$exclusions"
+  get_file_list "$dir2" "$tmpdir2" "$exclusions"
 
   echo "=== Files only in $dir1 ==="
   comm -23 "$tmpdir1" "$tmpdir2"
