@@ -17,6 +17,80 @@ A POSIX-compliant shell script that compares two directories and identifies diff
 - `directory1` - First directory to compare
 - `directory2` - Second directory to compare
 
+## Comparison with diff -qr
+
+This tool provides a structured alternative to `diff -qr directory1 directory2` with several key differences:
+
+### Functional Differences
+
+**Output Format:**
+- `diff -qr`: Mixed output listing all differences together
+- This tool: Three distinct sections (only in dir1, only in dir2, different contents)
+
+**Exclusion Patterns:**
+- `diff -qr`: Requires `-x` for each pattern or post-processing with grep
+- This tool: Built-in support for multiple `-x` patterns in a single command
+
+**Content Comparison:**
+- `diff -qr`: Binary comparison, may show "files differ" inconsistently
+- This tool: SHA-256 hash comparison, consistent across all file types
+
+**Scripting:**
+- `diff -qr`: Output requires parsing mixed formats
+- This tool: Structured sections with clear delimiters for easy parsing
+
+### Practical Examples
+
+Compare directories excluding node_modules and .git:
+
+```bash
+# Using diff -qr (verbose, harder to parse)
+diff -qr -x node_modules -x .git dir1 dir2
+
+# Using this tool (same result, clearer output)
+./dircompare.sh -x node_modules/ -x .git/ dir1 dir2
+```
+
+### When to Use Each Tool
+
+**Use `diff -qr` when:**
+- Quick interactive checks
+- Need to see actual file differences (use without `-q`)
+- Simple one-off comparisons
+- Already familiar with diff output format
+
+**Use this tool when:**
+- Writing scripts that process comparison results
+- Need multiple directory exclusions
+- Want consistent hash-based comparison
+- Require structured, parseable output
+- Working across different Unix-like systems
+
+### Example Output Comparison
+
+Given directories with differences, `diff -qr` produces:
+
+```
+Files dir1/file1.txt and dir2/file1.txt differ
+Only in dir1: file2.txt
+Only in dir2: file3.txt
+```
+
+This tool produces:
+
+```
+=== Files only in dir1 ===
+file2.txt
+
+=== Files only in dir2 ===
+file3.txt
+
+=== Files in both directories with different contents ===
+file1.txt
+```
+
+The structured format makes it trivial to process each category separately in scripts.
+
 ## Output
 
 The tool produces three sections:
@@ -82,15 +156,28 @@ fi
 - Patterns can include subdirectories (e.g., `src/generated/`)
 - Exclusions apply to both directories being compared
 
+## POSIX Compliance
+
+This script strictly adheres to POSIX standards:
+
+- Uses only POSIX shell features (no bash-isms)
+- Relies solely on standard POSIX utilities
+- Tested with multiple POSIX-compliant shells: sh, dash, bash, ksh
+
+**Symlink Handling:**
+Symbolic links are automatically excluded from comparison. The `-type f` test in `find` naturally skips symlinks, ensuring only regular files are compared.
+
 ## Limitations
 
-- Symlinks are skipped (not followed)
+- Symlinks are skipped (not followed or compared)
 - Requires read permissions on both directories
-- Content comparison uses SHA-256 hashing
+- Content comparison uses SHA-256 hashing (files are not compared byte-by-byte)
+- Large files may take time to hash
 
 ## Compatibility
 
 Tested on:
-- Linux (various distributions)
-- macOS
-- BSD systems
+- Linux (various distributions with dash, bash)
+- macOS (with system sh)
+- BSD systems (FreeBSD, OpenBSD)
+- Solaris (with POSIX sh)

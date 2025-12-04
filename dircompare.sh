@@ -2,8 +2,19 @@
 
 set -e
 
+tmpdir1=""
+tmpdir2=""
+tmpcommon=""
+tmphash1=""
+tmphash2=""
+differences_found=0
+
 cleanup() {
-  rm -f "$tmpdir1" "$tmpdir2" "$tmpcommon" "$tmphash1" "$tmphash2"
+  [ -n "$tmpdir1" ] && rm -f "$tmpdir1"
+  [ -n "$tmpdir2" ] && rm -f "$tmpdir2"
+  [ -n "$tmpcommon" ] && rm -f "$tmpcommon"
+  [ -n "$tmphash1" ] && rm -f "$tmphash1"
+  [ -n "$tmphash2" ] && rm -f "$tmphash2"
 }
 
 trap cleanup EXIT INT TERM
@@ -19,12 +30,8 @@ usage() {
 }
 
 validate_directory() {
-  if [ ! -d "$1" ]; then
-    error_exit "Directory does not exist: $1"
-  fi
-  if [ ! -r "$1" ]; then
-    error_exit "Directory is not readable: $1"
-  fi
+  [ -d "$1" ] || error_exit "Directory does not exist: $1"
+  [ -r "$1" ] || error_exit "Directory is not readable: $1"
 }
 
 get_hash_command() {
@@ -39,19 +46,16 @@ get_hash_command() {
 
 build_find_exclusions() {
   exclusions="$1"
-  if [ -z "$exclusions" ]; then
-    echo ""
-    return
-  fi
+  [ -z "$exclusions" ] && return
 
   result=""
+  old_ifs="$IFS"
   IFS="|"
   for pattern in $exclusions; do
-    if [ -n "$result" ]; then
-      result="$result -o"
-    fi
+    [ -n "$result" ] && result="$result -o"
     result="$result -path ./$pattern -prune"
   done
+  IFS="$old_ifs"
   echo "$result -o"
 }
 
@@ -65,9 +69,9 @@ get_file_list() {
   find_exclusions=$(build_find_exclusions "$exclusions")
 
   if [ -n "$find_exclusions" ]; then
-    eval "find . $find_exclusions -type f ! -type l -print" | sed 's|^\./||' | sort >"$output"
+    eval "find . $find_exclusions -type f -print" | sed 's|^\./||' | sort >"$output"
   else
-    find . -type f ! -type l -print | sed 's|^\./||' | sort >"$output"
+    find . -type f -print | sed 's|^\./||' | sort >"$output"
   fi
 
   cd - >/dev/null
@@ -78,9 +82,6 @@ compare_contents() {
   dir2="$2"
   common_files="$3"
   hash_cmd="$4"
-
-  tmpdir1="$5"
-  tmpdir2="$6"
 
   while IFS= read -r file; do
     cd "$dir1" || error_exit "Cannot change to directory: $dir1"
@@ -93,6 +94,7 @@ compare_contents() {
 
     if [ "$hash1" != "$hash2" ]; then
       echo "$file"
+      differences_found=1
     fi
   done <"$common_files"
 }
@@ -103,9 +105,7 @@ main() {
   while [ $# -gt 0 ]; do
     case "$1" in
     -x | --exclude)
-      if [ -z "$2" ]; then
-        error_exit "Option $1 requires an argument"
-      fi
+      [ -n "$2" ] || error_exit "Option $1 requires an argument"
       if [ -z "$exclusions" ]; then
         exclusions="$2"
       else
@@ -122,9 +122,7 @@ main() {
     esac
   done
 
-  if [ $# -ne 2 ]; then
-    usage
-  fi
+  [ $# -eq 2 ] || usage
 
   dir1="$1"
   dir2="$2"
@@ -144,24 +142,24 @@ main() {
   get_file_list "$dir2" "$tmpdir2" "$exclusions"
 
   echo "=== Files only in $dir1 ==="
-  comm -23 "$tmpdir1" "$tmpdir2"
+  if comm -23 "$tmpdir1" "$tmpdir2" | grep -q .; then
+    comm -23 "$tmpdir1" "$tmpdir2"
+    differences_found=1
+  fi
 
   echo ""
   echo "=== Files only in $dir2 ==="
-  comm -13 "$tmpdir1" "$tmpdir2"
+  if comm -13 "$tmpdir1" "$tmpdir2" | grep -q .; then
+    comm -13 "$tmpdir1" "$tmpdir2"
+    differences_found=1
+  fi
 
   echo ""
   echo "=== Files in both directories with different contents ==="
   comm -12 "$tmpdir1" "$tmpdir2" >"$tmpcommon"
-  compare_contents "$dir1" "$dir2" "$tmpcommon" "$hash_cmd" "$tmphash1" "$tmphash2"
+  compare_contents "$dir1" "$dir2" "$tmpcommon" "$hash_cmd"
 
-  if [ -s "$tmpdir1" ] || [ -s "$tmpdir2" ]; then
-    if ! cmp -s "$tmpdir1" "$tmpdir2"; then
-      exit 1
-    fi
-  fi
-
-  exit 0
+  exit $differences_found
 }
 
 main "$@"
