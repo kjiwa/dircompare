@@ -5,7 +5,7 @@ A POSIX-compliant shell script that compares two directories and identifies diff
 ## Usage
 
 ```bash
-./dir-compare.sh <directory1> <directory2>
+./dircompare.sh <directory1> <directory2>
 ```
 
 ## Output
@@ -30,25 +30,25 @@ The tool produces three sections:
 ## Installation
 
 ```bash
-chmod +x dir-compare.sh
+chmod +x dircompare.sh
 ```
 
 Optionally, move to a directory in your PATH:
 
 ```bash
-sudo mv dir-compare.sh /usr/local/bin/dir-compare
+sudo mv dircompare.sh /usr/local/bin/dircompare
 ```
 
 ## Examples
 
 Compare two directories:
 ```bash
-./dir-compare.sh /path/to/backup /path/to/original
+./dircompare.sh /path/to/backup /path/to/original
 ```
 
 Use in scripts:
 ```bash
-if ./dir-compare.sh dir1 dir2; then
+if ./dircompare.sh dir1 dir2; then
     echo "Directories are identical"
 else
     echo "Differences found"
