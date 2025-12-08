@@ -1,20 +1,66 @@
 #!/bin/sh
 
+# MIT License
+#
+# Copyright (c) 2025 Kamil Jiwa
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
 set -e
 
-tmpdir1=""
-tmpdir2=""
-tmpcommon=""
-tmphash1=""
-tmphash2=""
-differences_found=0
+FILES_DIR1=""
+FILES_DIR2=""
+FILES_COMMON=""
+FILES_DIFF1=""
+FILES_DIFF2=""
+DIFFERENCES_FOUND=0
+
+get_temp_dir() {
+  echo "${TMPDIR:-/tmp}"
+}
+
+create_temp_file() {
+  tmpfile="$1"
+  : >"$tmpfile" || error_exit "Failed to create temporary file"
+}
+
+init_temp_files() {
+  tmpdir=$(get_temp_dir)
+  FILES_DIR1="${tmpdir}/dircompare1.$"
+  FILES_DIR2="${tmpdir}/dircompare2.$"
+  FILES_COMMON="${tmpdir}/dircomparecommon.$"
+  FILES_DIFF1="${tmpdir}/dircomparediff1.$"
+  FILES_DIFF2="${tmpdir}/dircomparediff2.$"
+
+  create_temp_file "$FILES_DIR1"
+  create_temp_file "$FILES_DIR2"
+  create_temp_file "$FILES_COMMON"
+  create_temp_file "$FILES_DIFF1"
+  create_temp_file "$FILES_DIFF2"
+}
 
 cleanup() {
-  [ -n "$tmpdir1" ] && rm -f "$tmpdir1"
-  [ -n "$tmpdir2" ] && rm -f "$tmpdir2"
-  [ -n "$tmpcommon" ] && rm -f "$tmpcommon"
-  [ -n "$tmphash1" ] && rm -f "$tmphash1"
-  [ -n "$tmphash2" ] && rm -f "$tmphash2"
+  [ -n "$FILES_DIR1" ] && rm -f "$FILES_DIR1"
+  [ -n "$FILES_DIR2" ] && rm -f "$FILES_DIR2"
+  [ -n "$FILES_COMMON" ] && rm -f "$FILES_COMMON"
+  [ -n "$FILES_DIFF1" ] && rm -f "$FILES_DIFF1"
+  [ -n "$FILES_DIFF2" ] && rm -f "$FILES_DIFF2"
 }
 
 trap cleanup EXIT INT TERM
@@ -30,8 +76,9 @@ usage() {
 }
 
 validate_directory() {
-  [ -d "$1" ] || error_exit "Directory does not exist: $1"
-  [ -r "$1" ] || error_exit "Directory is not readable: $1"
+  dir="$1"
+  [ -d "$dir" ] || error_exit "Directory does not exist: $dir"
+  [ -r "$dir" ] || error_exit "Directory is not readable: $dir"
 }
 
 get_hash_command() {
@@ -94,14 +141,24 @@ compare_contents() {
 
     if [ "$hash1" != "$hash2" ]; then
       echo "$file"
-      differences_found=1
+      DIFFERENCES_FOUND=1
     fi
   done <"$common_files"
 }
 
-main() {
-  exclusions=""
+show_unique_files() {
+  label="$1"
+  file_list="$2"
 
+  echo "=== $label ==="
+  if grep -q . "$file_list"; then
+    cat "$file_list"
+    DIFFERENCES_FOUND=1
+  fi
+}
+
+parse_exclusions() {
+  exclusions=""
   while [ $# -gt 0 ]; do
     case "$1" in
     -x | --exclude)
@@ -121,8 +178,62 @@ main() {
       ;;
     esac
   done
+  echo "$exclusions"
+}
 
+skip_parsed_options() {
+  while [ $# -gt 0 ]; do
+    case "$1" in
+    -x | --exclude) shift 2 ;;
+    -*) shift ;;
+    *) break ;;
+    esac
+  done
+  echo "$@"
+}
+
+validate_args() {
   [ $# -eq 2 ] || usage
+}
+
+show_files_only_in_dir1() {
+  dir1="$1"
+  comm -23 "$FILES_DIR1" "$FILES_DIR2" >"$FILES_DIFF1"
+  show_unique_files "Files only in $dir1" "$FILES_DIFF1"
+}
+
+show_files_only_in_dir2() {
+  dir2="$1"
+  comm -13 "$FILES_DIR1" "$FILES_DIR2" >"$FILES_DIFF2"
+  show_unique_files "Files only in $dir2" "$FILES_DIFF2"
+}
+
+show_files_with_different_contents() {
+  dir1="$1"
+  dir2="$2"
+  hash_cmd="$3"
+
+  echo "=== Files in both directories with different contents ==="
+  comm -12 "$FILES_DIR1" "$FILES_DIR2" >"$FILES_COMMON"
+  compare_contents "$dir1" "$dir2" "$FILES_COMMON" "$hash_cmd"
+}
+
+compare_directories() {
+  dir1="$1"
+  dir2="$2"
+  hash_cmd="$3"
+
+  show_files_only_in_dir1 "$dir1"
+  echo ""
+  show_files_only_in_dir2 "$dir2"
+  echo ""
+  show_files_with_different_contents "$dir1" "$dir2" "$hash_cmd"
+}
+
+main() {
+  exclusions=$(parse_exclusions "$@")
+  set -- $(skip_parsed_options "$@")
+  validate_args "$@"
 
   dir1="$1"
   dir2="$2"
@@ -131,35 +242,14 @@ main() {
   validate_directory "$dir2"
 
   hash_cmd=$(get_hash_command)
+  init_temp_files
 
-  tmpdir1=$(mktemp)
-  tmpdir2=$(mktemp)
-  tmpcommon=$(mktemp)
-  tmphash1=$(mktemp)
-  tmphash2=$(mktemp)
+  get_file_list "$dir1" "$FILES_DIR1" "$exclusions"
+  get_file_list "$dir2" "$FILES_DIR2" "$exclusions"
 
-  get_file_list "$dir1" "$tmpdir1" "$exclusions"
-  get_file_list "$dir2" "$tmpdir2" "$exclusions"
+  compare_directories "$dir1" "$dir2" "$hash_cmd"
 
-  echo "=== Files only in $dir1 ==="
-  if comm -23 "$tmpdir1" "$tmpdir2" | grep -q .; then
-    comm -23 "$tmpdir1" "$tmpdir2"
-    differences_found=1
-  fi
-
-  echo ""
-  echo "=== Files only in $dir2 ==="
-  if comm -13 "$tmpdir1" "$tmpdir2" | grep -q .; then
-    comm -13 "$tmpdir1" "$tmpdir2"
-    differences_found=1
-  fi
-
-  echo ""
-  echo "=== Files in both directories with different contents ==="
-  comm -12 "$tmpdir1" "$tmpdir2" >"$tmpcommon"
-  compare_contents "$dir1" "$dir2" "$tmpcommon" "$hash_cmd"
-
-  exit $differences_found
+  exit $DIFFERENCES_FOUND
 }
 
 main "$@"
