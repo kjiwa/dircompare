@@ -1,4 +1,5 @@
 #!/bin/sh
+# shellcheck disable=SC3043  # local: supported by dash, bash, and macOS /bin/sh
 
 # MIT License
 #
@@ -24,42 +25,35 @@
 
 set -eu
 
+NL='
+'
+readonly NL
+
+WORK_DIR=""
 FILES_DIR1=""
 FILES_DIR2=""
 FILES_COMMON=""
-FILES_DIFF1=""
-FILES_DIFF2=""
+DIR1=""
+DIR2=""
+EXCLUSIONS=""
+HASH_CMD=""
 DIFFERENCES_FOUND=0
 
 error_exit() {
   echo "Error: $1" >&2
-  exit 1
+  exit 2
 }
 
-create_temp_files() {
-  tmpdir="${TMPDIR:-/tmp}"
-  FILES_DIR1="${tmpdir}/dircompare_dir1.$$"
-  FILES_DIR2="${tmpdir}/dircompare_dir2.$$"
-  FILES_COMMON="${tmpdir}/dircompare_common.$$"
-  FILES_DIFF1="${tmpdir}/dircompare_diff1.$$"
-  FILES_DIFF2="${tmpdir}/dircompare_diff2.$$"
-
-  : >"$FILES_DIR1" || error_exit "Failed to create temporary file"
-  : >"$FILES_DIR2" || error_exit "Failed to create temporary file"
-  : >"$FILES_COMMON" || error_exit "Failed to create temporary file"
-  : >"$FILES_DIFF1" || error_exit "Failed to create temporary file"
-  : >"$FILES_DIFF2" || error_exit "Failed to create temporary file"
-}
-
+# shellcheck disable=SC2329  # invoked via trap
 cleanup() {
-  [ -n "$FILES_DIR1" ] && rm -f "$FILES_DIR1"
-  [ -n "$FILES_DIR2" ] && rm -f "$FILES_DIR2"
-  [ -n "$FILES_COMMON" ] && rm -f "$FILES_COMMON"
-  [ -n "$FILES_DIFF1" ] && rm -f "$FILES_DIFF1"
-  [ -n "$FILES_DIFF2" ] && rm -f "$FILES_DIFF2"
+  if [ -n "$WORK_DIR" ]; then
+    rm -rf "$WORK_DIR"
+  fi
 }
 
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 usage() {
   cat <<EOF
@@ -71,150 +65,117 @@ Usage: $0 [-x|--exclude <pattern>]... <directory1> <directory2>
     <directory1>      First directory to compare.
     <directory2>      Second directory to compare.
     -x, --exclude     Pattern to exclude from comparison. Can be specified multiple times.
-    -h                Display this help message.
+    -h, --help        Display this help message.
+
+  Exit status:
+    0  directories match
+    1  differences found
+    2  error
 
 EOF
-  exit 1
-}
-
-validate_input() {
-  input="$1"
-  type="$2"
-
-  case "$input" in
-  *[\'\"]*) error_exit "Invalid characters in $type: $input" ;;
-  esac
 }
 
 validate_directory() {
-  dir="$1"
+  local dir="$1"
   [ -d "$dir" ] || error_exit "Directory does not exist: $dir"
   [ -r "$dir" ] || error_exit "Directory is not readable: $dir"
 }
 
-get_hash_command() {
+set_hash_command() {
   if command -v sha256sum >/dev/null 2>&1; then
-    echo "sha256sum"
+    HASH_CMD="sha256sum"
   elif command -v shasum >/dev/null 2>&1; then
-    echo "shasum -a 256"
+    HASH_CMD="shasum -a 256"
   else
     error_exit "Neither sha256sum nor shasum found"
   fi
+  readonly HASH_CMD
 }
 
-build_exclusion_args() {
-  exclusions="$1"
-  base_dir="$2"
-
-  [ -z "$exclusions" ] && return
-
-  old_ifs="$IFS"
-  IFS="|"
-
-  for pattern in $exclusions; do
-    set -- "$@" -path "$base_dir/$pattern" -prune -o
-  done
-
-  IFS="$old_ifs"
+create_temp_files() {
+  WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/dircompare.XXXXXX") ||
+    error_exit "Failed to create temporary directory"
+  FILES_DIR1="$WORK_DIR/list1"
+  FILES_DIR2="$WORK_DIR/list2"
+  FILES_COMMON="$WORK_DIR/common"
+  readonly WORK_DIR FILES_DIR1 FILES_DIR2 FILES_COMMON
 }
 
+# find arguments accumulate in the positional parameters; POSIX sh has no arrays.
 get_file_list() {
-  dir="$1"
-  output="$2"
-  exclusions="$3"
+  local dir="$1" output="$2" old_ifs pattern
 
-  abs_dir=$(cd "$dir" && pwd) || error_exit "Cannot access directory: $dir"
-
-  set -- "$abs_dir"
-  build_exclusion_args "$exclusions" "$abs_dir"
+  set -- .
+  if [ -n "$EXCLUSIONS" ]; then
+    old_ifs="$IFS"
+    IFS="$NL"
+    set -f
+    for pattern in $EXCLUSIONS; do
+      # Trailing slash stripped: documented patterns like "env/" must match
+      # find paths, which have no trailing slash.
+      set -- "$@" -path "./${pattern%/}" -prune -o
+    done
+    set +f
+    IFS="$old_ifs"
+  fi
   set -- "$@" -type f -print
 
-  find "$@" | sed "s|^$abs_dir/||" | sort >"$output" || error_exit "Find command failed"
+  (cd -- "$dir" && find "$@") | sed 's|^\./||' | sort >"$output"
 }
 
-compute_hash() {
-  file="$1"
-  hash_cmd="$2"
-  $hash_cmd "$file" 2>/dev/null | awk '{print $1}'
-}
+show_only_in() {
+  local comm_flags="$1" dir="$2" only
 
-compare_contents() {
-  dir1="$1"
-  dir2="$2"
-  common_files="$3"
-  hash_cmd="$4"
+  only=$(comm "$comm_flags" "$FILES_DIR1" "$FILES_DIR2")
 
-  abs_dir1=$(cd "$dir1" && pwd)
-  abs_dir2=$(cd "$dir2" && pwd)
-
-  while IFS= read -r file; do
-    hash1=$(compute_hash "$abs_dir1/$file" "$hash_cmd")
-    hash2=$(compute_hash "$abs_dir2/$file" "$hash_cmd")
-
-    if [ "$hash1" != "$hash2" ]; then
-      echo "$file"
-      DIFFERENCES_FOUND=1
-    fi
-  done <"$common_files"
-}
-
-show_files_only_in_dir1() {
-  dir1="$1"
-
-  comm -23 "$FILES_DIR1" "$FILES_DIR2" >"$FILES_DIFF1"
-
-  echo "=== Files only in $dir1 ==="
-  if grep -q . "$FILES_DIFF1"; then
-    cat "$FILES_DIFF1"
+  echo "=== Files only in $dir ==="
+  if [ -n "$only" ]; then
+    printf '%s\n' "$only"
     DIFFERENCES_FOUND=1
   fi
   echo ""
 }
 
-show_files_only_in_dir2() {
-  dir2="$1"
-
-  comm -13 "$FILES_DIR1" "$FILES_DIR2" >"$FILES_DIFF2"
-
-  echo "=== Files only in $dir2 ==="
-  if grep -q . "$FILES_DIFF2"; then
-    cat "$FILES_DIFF2"
-    DIFFERENCES_FOUND=1
-  fi
-  echo ""
-}
-
-show_files_with_different_contents() {
-  dir1="$1"
-  dir2="$2"
-  hash_cmd="$3"
+show_content_diffs() {
+  local file hash1 hash2
 
   echo "=== Files in both directories with different contents ==="
   comm -12 "$FILES_DIR1" "$FILES_DIR2" >"$FILES_COMMON"
-  compare_contents "$dir1" "$dir2" "$FILES_COMMON" "$hash_cmd"
-}
 
-show_differences() {
-  dir1="$1"
-  dir2="$2"
-  hash_cmd="$3"
+  while IFS= read -r file; do
+    # HASH_CMD is deliberately unquoted: it may be "shasum -a 256".
+    hash1=$($HASH_CMD -- "$DIR1/$file" | awk '{print $1}')
+    hash2=$($HASH_CMD -- "$DIR2/$file" | awk '{print $1}')
 
-  show_files_only_in_dir1 "$dir1"
-  show_files_only_in_dir2 "$dir2"
-  show_files_with_different_contents "$dir1" "$dir2" "$hash_cmd"
+    if [ -z "$hash1" ] || [ -z "$hash2" ]; then
+      error_exit "Failed to hash file: $file"
+    fi
+
+    if [ "$hash1" != "$hash2" ]; then
+      printf '%s\n' "$file"
+      DIFFERENCES_FOUND=1
+    fi
+  done <"$FILES_COMMON"
 }
 
 parse_args() {
-  exclusions=""
-
   while [ $# -gt 0 ]; do
     case "$1" in
-    -h) usage ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
     -x | --exclude)
       [ -n "${2:-}" ] || error_exit "Option $1 requires an argument"
-      validate_input "$2" "exclusion pattern"
-      exclusions="${exclusions:+$exclusions|}$2"
+      case "$2" in
+      *"$NL"*) error_exit "Exclusion pattern must not contain a newline" ;;
+      esac
+      EXCLUSIONS="${EXCLUSIONS:+$EXCLUSIONS$NL}$2"
       shift 2
+      ;;
+    --)
+      shift
+      break
       ;;
     -*)
       error_exit "Unknown option: $1"
@@ -225,38 +186,32 @@ parse_args() {
     esac
   done
 
-  [ $# -eq 2 ] || usage
+  [ $# -eq 2 ] || {
+    usage >&2
+    exit 2
+  }
 
-  dir1="$1"
-  dir2="$2"
+  DIR1="$1"
+  DIR2="$2"
+  readonly DIR1 DIR2 EXCLUSIONS
 
-  validate_directory "$dir1"
-  validate_directory "$dir2"
-
-  echo "$exclusions|$dir1|$dir2"
+  validate_directory "$DIR1"
+  validate_directory "$DIR2"
 }
 
 main() {
-  result=$(parse_args "$@")
-
-  old_ifs="$IFS"
-  IFS="|"
-  set -- $result
-  IFS="$old_ifs"
-
-  exclusions="$1"
-  dir1="$2"
-  dir2="$3"
-
-  hash_cmd=$(get_hash_command)
+  parse_args "$@"
+  set_hash_command
   create_temp_files
 
-  get_file_list "$dir1" "$FILES_DIR1" "$exclusions"
-  get_file_list "$dir2" "$FILES_DIR2" "$exclusions"
+  get_file_list "$DIR1" "$FILES_DIR1"
+  get_file_list "$DIR2" "$FILES_DIR2"
 
-  show_differences "$dir1" "$dir2" "$hash_cmd"
+  show_only_in -23 "$DIR1"
+  show_only_in -13 "$DIR2"
+  show_content_diffs
 
-  exit $DIFFERENCES_FOUND
+  exit "$DIFFERENCES_FOUND"
 }
 
 main "$@"

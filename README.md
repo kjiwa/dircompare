@@ -20,7 +20,7 @@ A POSIX-compliant shell script that compares two directories and identifies diff
 ## Requirements
 
 - POSIX-compliant shell (sh, bash, dash, etc.)
-- Standard utilities: `find`, `sort`, `comm`, `awk`, `sed`
+- Standard utilities: `find`, `sort`, `comm`, `awk`, `sed`, `mktemp`
 - Hash utility: `sha256sum` (Linux) or `shasum` (macOS)
 
 ## Output
@@ -34,7 +34,8 @@ The tool produces three sections:
 ## Exit Codes
 
 - `0` - Directories are identical
-- `1` - Differences found or error occurred
+- `1` - Differences found
+- `2` - Error occurred (invalid usage, unreadable file, etc.)
 
 ## Examples
 
