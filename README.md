@@ -5,12 +5,13 @@ A POSIX-compliant shell script that compares two directories and identifies diff
 ## Usage
 
 ```bash
-./dircompare.sh [-x|--exclude <pattern>]... <directory1> <directory2>
+./dircompare.sh [-x|--exclude <pattern>]... [-c|--compare <hash|size>] <directory1> <directory2>
 ```
 
 ### Options
 
 - `-x <pattern>`, `--exclude <pattern>` - Exclude directories matching the pattern (can be specified multiple times)
+- `-c <hash|size>`, `--compare <hash|size>` - Comparison mode for files present in both directories: `hash` (default) compares SHA-256 of contents; `size` compares file sizes only (never reads file contents; useful for cloud/network mounts where reads are expensive)
 
 ### Arguments
 
@@ -21,7 +22,8 @@ A POSIX-compliant shell script that compares two directories and identifies diff
 
 - POSIX-compliant shell (sh, bash, dash, etc.)
 - Standard utilities: `find`, `sort`, `comm`, `awk`, `sed`, `mktemp`
-- Hash utility: `sha256sum` (Linux) or `shasum` (macOS)
+- Hash utility: `sha256sum` (Linux) or `shasum` (macOS) - required for the default `hash` comparison mode
+- `stat` (GNU or BSD) - required for `--compare size`
 
 ## Output
 
@@ -29,7 +31,7 @@ The tool produces three sections:
 
 1. **Files only in directory1** - Files present in the first directory but not in the second
 2. **Files only in directory2** - Files present in the second directory but not in the first
-3. **Files in both directories with different contents** - Files that exist in both locations but have different content
+3. **Files in both directories with different contents** - Files that exist in both locations but have different content (in `--compare size` mode, this section header reads "Files in both directories with different sizes" and compares file sizes only)
 
 ## Exit Codes
 
@@ -64,6 +66,11 @@ else
 fi
 ```
 
+Cheaply compare directories on cloud/network mounts (e.g. rclone-mounted S3) without reading file content:
+```bash
+./dircompare.sh --compare size ~/mnt/glacier-backup/Backup ~/mnt/archive/Backup
+```
+
 ## Exclusion Patterns
 
 - Patterns are relative paths from the comparison root
@@ -77,6 +84,7 @@ fi
 - Requires read permissions on both directories
 - Content comparison uses SHA-256 hashing (files are not compared byte-by-byte)
 - Large files may take time to hash
+- `--compare size` cannot detect files that differ in content but have identical sizes
 
 ## Comparison with diff -qr
 

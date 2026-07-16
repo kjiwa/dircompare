@@ -36,7 +36,9 @@ FILES_COMMON=""
 DIR1=""
 DIR2=""
 EXCLUSIONS=""
+COMPARE_MODE="hash"
 HASH_CMD=""
+SIZE_CMD=""
 DIFFERENCES_FOUND=0
 
 error_exit() {
@@ -57,7 +59,7 @@ trap 'exit 143' TERM
 
 usage() {
   cat <<EOF
-Usage: $0 [-x|--exclude <pattern>]... <directory1> <directory2>
+Usage: $0 [-x|--exclude <pattern>]... [-c|--compare <hash|size>] <directory1> <directory2>
 
   Compares two directories and reports differences in files and content.
 
@@ -65,6 +67,10 @@ Usage: $0 [-x|--exclude <pattern>]... <directory1> <directory2>
     <directory1>      First directory to compare.
     <directory2>      Second directory to compare.
     -x, --exclude     Pattern to exclude from comparison. Can be specified multiple times.
+    -c, --compare     Comparison mode for files present in both directories:
+                      'hash' (default) compares SHA-256 of contents;
+                      'size' compares file sizes only (never reads file contents;
+                      useful for cloud/network mounts where reads are expensive).
     -h, --help        Display this help message.
 
   Exit status:
@@ -90,6 +96,17 @@ set_hash_command() {
     error_exit "Neither sha256sum nor shasum found"
   fi
   readonly HASH_CMD
+}
+
+set_size_command() {
+  if stat -c %s / >/dev/null 2>&1; then
+    SIZE_CMD="stat -c %s" # GNU coreutils
+  elif stat -f %z / >/dev/null 2>&1; then
+    SIZE_CMD="stat -f %z" # BSD / macOS
+  else
+    error_exit "No supported stat command found for size comparison"
+  fi
+  readonly SIZE_CMD
 }
 
 create_temp_files() {
@@ -136,22 +153,36 @@ show_only_in() {
   echo ""
 }
 
-show_content_diffs() {
-  local file hash1 hash2
+file_signature() {
+  # HASH_CMD / SIZE_CMD are deliberately unquoted: they contain arguments
+  # (e.g. "shasum -a 256" or "stat -c %s").
+  if [ "$COMPARE_MODE" = "size" ]; then
+    $SIZE_CMD -- "$1"
+  else
+    $HASH_CMD -- "$1" | awk '{print $1}'
+  fi
+}
 
-  echo "=== Files in both directories with different contents ==="
+show_content_diffs() {
+  local file sig1 sig2 header
+
+  if [ "$COMPARE_MODE" = "size" ]; then
+    header="=== Files in both directories with different sizes ==="
+  else
+    header="=== Files in both directories with different contents ==="
+  fi
+  echo "$header"
   comm -12 "$FILES_DIR1" "$FILES_DIR2" >"$FILES_COMMON"
 
   while IFS= read -r file; do
-    # HASH_CMD is deliberately unquoted: it may be "shasum -a 256".
-    hash1=$($HASH_CMD -- "$DIR1/$file" | awk '{print $1}')
-    hash2=$($HASH_CMD -- "$DIR2/$file" | awk '{print $1}')
+    sig1=$(file_signature "$DIR1/$file")
+    sig2=$(file_signature "$DIR2/$file")
 
-    if [ -z "$hash1" ] || [ -z "$hash2" ]; then
-      error_exit "Failed to hash file: $file"
+    if [ -z "$sig1" ] || [ -z "$sig2" ]; then
+      error_exit "Failed to stat/hash file: $file"
     fi
 
-    if [ "$hash1" != "$hash2" ]; then
+    if [ "$sig1" != "$sig2" ]; then
       printf '%s\n' "$file"
       DIFFERENCES_FOUND=1
     fi
@@ -171,6 +202,15 @@ parse_args() {
       *"$NL"*) error_exit "Exclusion pattern must not contain a newline" ;;
       esac
       EXCLUSIONS="${EXCLUSIONS:+$EXCLUSIONS$NL}$2"
+      shift 2
+      ;;
+    -c | --compare)
+      [ -n "${2:-}" ] || error_exit "Option $1 requires an argument"
+      case "$2" in
+      hash | size) ;;
+      *) error_exit "Invalid compare mode: $2 (expected 'hash' or 'size')" ;;
+      esac
+      COMPARE_MODE="$2"
       shift 2
       ;;
     --)
@@ -193,7 +233,7 @@ parse_args() {
 
   DIR1="$1"
   DIR2="$2"
-  readonly DIR1 DIR2 EXCLUSIONS
+  readonly DIR1 DIR2 EXCLUSIONS COMPARE_MODE
 
   validate_directory "$DIR1"
   validate_directory "$DIR2"
@@ -201,7 +241,11 @@ parse_args() {
 
 main() {
   parse_args "$@"
-  set_hash_command
+  if [ "$COMPARE_MODE" = "size" ]; then
+    set_size_command
+  else
+    set_hash_command
+  fi
   create_temp_files
 
   get_file_list "$DIR1" "$FILES_DIR1"
